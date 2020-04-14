@@ -8,3 +8,7 @@ Determination of association/binding constants from titration data using any sys
 
 ## Full description
 A full description is given in the Jupyter notebook `How-to.ipynb`, since it can render maths.
+
+## A picture says more than 1000 words
+
+![Sample output of the bindfit module](sample-output.png)
