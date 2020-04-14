@@ -3,9 +3,9 @@
 
 from collections import Counter
 import numpy as np
-import numpy.ma as ma
 import pandas as pd
 from scipy.optimize import least_squares
+
 
 
 class SupraSystem:
@@ -94,12 +94,11 @@ class ConcentrationProfileSimulator:
     def num_points(self):
         return self._conc_initial.shape[1]
     
-    @property
-    def equilibrium_conc(self):
-        return self._conc_equilibrated
+    def equilibrium_conc(self, species_name:str) -> np.ndarray:
+        return self._conc_equilibrated[self.species_names.index(species_name), :]
     
     def initial_conc(self, species_name:str) -> np.ndarray:
-        return self._df_conc_initial[species_name]
+        return self._df_conc_initial[species_name].to_numpy()
 
     def set_initial_concentrations(self, conc_initial:pd.DataFrame):
         self._df_conc_initial = pd.DataFrame( {key: [] for key in self._ss.species_names} )
@@ -177,13 +176,11 @@ class BindingCurveSimulator(ConcentrationProfileSimulator):
     def __init__(self, ss:SupraSystem):
         ConcentrationProfileSimulator.__init__(self, ss)
 
-    @property
-    def bindcurv_exp(self):
-        return self._bindcurv_exp
+    def bindcurv_exp(self, obs_name:str) -> np.ndarray:
+        return self._bindcurv_exp[self._observed_at.index(obs_name),:]
     
-    @property
-    def bindcurv_calc(self):
-        return self._bindcurv_calc
+    def bindcurv_calc(self, obs_name:str) -> np.ndarray:
+        return self._bindcurv_calc[self._observed_at.index(obs_name),:]
     
     @property
     def num_observables(self):
@@ -204,7 +201,7 @@ class BindingCurveSimulator(ConcentrationProfileSimulator):
         
     def calc_binding_curves(self, epsilons:np.ndarray, assconst:np.ndarray):
         self.calc_equil_conc(assconst)
-        self._bindcurv_calc = np.matmul(epsilons, self.equilibrium_conc)
+        self._bindcurv_calc = np.matmul(epsilons, self._conc_equilibrated)
 
 
 
@@ -237,9 +234,8 @@ class BindingCurveFitter(BindingCurveSimulator):
     def assconst(self):
         return self._assconst
     
-    @property
-    def residuals(self):
-        return self._residuals
+    def bindcurv_residuals(self, obs_name:str) -> np.ndarray:
+        return self._residuals[self._observed_at.index(obs_name),:]
 
     def correlation_coeff(self, dtype:str='df'):
         if dtype == 'df':
@@ -268,7 +264,7 @@ class BindingCurveFitter(BindingCurveSimulator):
         
     def minimization_target(self, params) -> float:
         self.calc_binding_curves( *self.unpack_params(params) )
-        return (self.bindcurv_exp - self.bindcurv_calc).flatten()
+        return (self._bindcurv_exp - self._bindcurv_calc).flatten()
     
     def optimize(self, verbose=2):
         initial_guess = np.hstack([self._epsilons.compressed() / self._max_epsilons,
@@ -283,7 +279,7 @@ class BindingCurveFitter(BindingCurveSimulator):
                             method='trf', gtol=1e-6, verbose=verbose)
         
         self._epsilons, self._assconst = self.unpack_params(res.x)
-        self._residuals = self.bindcurv_exp - self.bindcurv_calc
+        self._residuals = self._bindcurv_exp - self._bindcurv_calc
         
         # after optimization, run correlation on residuals with species concentrations
         self.corr_resid_specconc()
@@ -295,7 +291,7 @@ class BindingCurveFitter(BindingCurveSimulator):
         for obs_idx, obs_name in enumerate(self.observed_at):
             for spec_idx, spec_name in enumerate(self.species_names):
                 corr_coef_mtx = np.corrcoef( self._residuals[obs_idx],
-                                             self.equilibrium_conc[spec_idx] )
+                                             self._conc_equilibrated[spec_idx] )
                 self._df_corr_coef.loc[obs_name, spec_name] = (corr_coef_mtx[0][1] + corr_coef_mtx[1][0])/2.
 
 
