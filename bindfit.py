@@ -9,8 +9,6 @@ from scipy.optimize import least_squares
 
 
 class SupraSystem:
-    _name:str
-    equilibria:pd.DataFrame
     
     def __init__(self, name:str):
         self._name = name
@@ -59,24 +57,20 @@ class SupraSystem:
 
 class ConcentrationProfileSimulator:
     
-    # highest level data:
-    _ss:SupraSystem
-    _df_conc_initial:pd.DataFrame
-    _conc_initial:np.ndarray
-    _conc_equilibrated:np.ndarray
-    
-    # concentration matrices:
-    _Del:np.array
-    _Del0:np.ndarray
-    _conc_min:np.array
-    _conc:np.array
-    _equilibria:np.array
-    _scopicity:np.array
-    
     def __init__(self, ss:SupraSystem):
+        # highest level data:
         self._ss = ss
+        self._df_conc_initial = pd.DataFrame()
+        self._conc_initial = np.array([])
+        self._conc_equilibrated = np.array([])
+    
+        # concentration matrices:
         self._scopicity = np.array(self._ss.equilibria['scopicity'])
         self._equilibria = np.array(self._ss.equilibria[self._ss.species_names])
+        self._Del = np.array([])
+        self._Del0 = np.array([])
+        self._conc_min = np.array([])
+        self._conc = np.array([])
 
     @property
     def num_equil(self):
@@ -169,12 +163,12 @@ class ConcentrationProfileSimulator:
 
 class BindingCurveSimulator(ConcentrationProfileSimulator):
     
-    _bindcurv_exp:np.ndarray
-    _bindcurv_calc:np.ndarray
-    _observed_at:list
-    
     def __init__(self, ss:SupraSystem):
         ConcentrationProfileSimulator.__init__(self, ss)
+        
+        self._bindcurv_exp = np.array([])
+        self._bindcurv_calc = np.array([])
+        self._observed_at = []
 
     def bindcurv_exp(self, obs_name:str) -> np.ndarray:
         return self._bindcurv_exp[self._observed_at.index(obs_name),:]
@@ -207,24 +201,24 @@ class BindingCurveSimulator(ConcentrationProfileSimulator):
 
 class BindingCurveFitter(BindingCurveSimulator):
     
-    _epsilons:np.ndarray
-    _epsilons_flat:np.ndarray
-    _epsilons_mask_flat:np.ndarray
-    _max_epsilons:float
-    _num_epsilons_used_in_fit:int
-    
-    _assconst:np.ndarray
-    _assconst_flat:np.ndarray
-    _assconst_mask_flat:np.ndarray
-    _max_assconst:float
-    _num_assconst_used_in_fit:int
-    
-    _rel_imp = 1. # relative importance of assconst over epsilon in fit
-    _residuals:np.ndarray
-    _df_corr_coef:pd.DataFrame
-    
     def __init__(self, ss:SupraSystem):
         BindingCurveSimulator.__init__(self, ss)
+        
+        self._epsilons = np.array([])
+        self._epsilons_flat = np.array([])
+        self._epsilons_mask_flat = np.array([])
+        self._max_epsilons = 0.
+        self._num_epsilons_used_in_fit = 0
+        
+        self._assconst = np.array([])
+        self._assconst_flat = np.array([])
+        self._assconst_mask_flat = np.array([])
+        self._max_assconst = 0.
+        self._num_assconst_used_in_fit = 0
+        
+        self._rel_imp = 1. # relative importance of assconst over epsilon in fit
+        self._residuals = np.array([])
+        self._df_corr_coef = pd.DataFrame()
         
     @property
     def epsilons(self):
