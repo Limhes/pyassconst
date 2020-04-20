@@ -5,6 +5,7 @@ from collections import Counter
 import numpy as np
 import pandas as pd
 from scipy.optimize import least_squares
+from scipy.optimize import fsolve
 
 
 
@@ -13,6 +14,7 @@ class SupraSystem:
     def __init__(self, name:str):
         self._name = name
         self.equilibria = pd.DataFrame()
+        self._boundary_matrix = np.array([])
         
     def add_equilibrium(self, _LHS:list, _RHS:list, _scopicity:float=1.0):
         """
@@ -27,16 +29,19 @@ class SupraSystem:
         LHS_summed = dict(Counter(_LHS))
         RHS_summed = dict(Counter(_RHS))
         # then take union of LHS and the negative of RHS:
-        eq = {species: [float(LHS_summed.get(species, 0) - RHS_summed.get(species, 0))]
+        eq = {species: [int(LHS_summed.get(species, 0) - RHS_summed.get(species, 0))]
             for species in set(LHS_summed) | set(RHS_summed)}
         eq['scopicity'] = [float(_scopicity)]
         
         # add eq to self.equilibria (outer join) and replace NaN with 0.0:
         self.equilibria = pd.concat([self.equilibria, pd.DataFrame(eq)],
-                                    axis=0, join='outer', ignore_index=True).fillna(0.0)
+                                    axis=0, join='outer', ignore_index=True).fillna(0)
         # sort columns alphabetically on species name:
         self.equilibria = self.equilibria.sort_index(axis=1)
         
+    def finalize_system(self, species_content:list):
+        self._boundary_matrix = np.hstack([np.identity(len(species_content)), species_content])
+    
     @property
     def name(self):
         return self._name
@@ -52,6 +57,10 @@ class SupraSystem:
     @property
     def num_equil(self):
         return self.equilibria.shape[0]
+    
+    @property
+    def boundary_matrix(self):
+        return self._boundary_matrix
 
 
 
@@ -61,16 +70,15 @@ class ConcentrationProfileSimulator:
         # highest level data:
         self._ss = ss
         self._df_conc_initial = pd.DataFrame()
+        self._conc0 = np.array([])
         self._conc_initial = np.array([])
         self._conc_equilibrated = np.array([])
     
         # concentration matrices:
         self._scopicity = np.array(self._ss.equilibria['scopicity'])
         self._equilibria = np.array(self._ss.equilibria[self._ss.species_names])
-        self._Del = np.array([])
-        self._Del0 = np.array([])
-        self._conc_min = np.array([])
-        self._conc = np.array([])
+        self._eq_pos = np.array([])
+        self._eq_neg = np.array([])
 
     @property
     def num_equil(self):
@@ -97,67 +105,31 @@ class ConcentrationProfileSimulator:
     def set_initial_concentrations(self, conc_initial:pd.DataFrame):
         self._df_conc_initial = pd.DataFrame( {key: [] for key in self._ss.species_names} )
         self._df_conc_initial = pd.concat([self._df_conc_initial, conc_initial],
-                                      axis=0, join='outer', ignore_index=True).fillna(0.0)
+                                      axis=0, join='outer', ignore_index=True).fillna(0.0).sort_index(axis=1)
         
-        self._conc_min = np.amin( np.array(conc_initial), axis=1 )
-        self._conc_initial = np.array(self._df_conc_initial).transpose()
-        self._Del0 = np.zeros((self.num_species, self.num_points))
-
+        self._conc0 = np.array(conc_initial.sort_index(axis=1)).transpose() # initial concentrations, only starting species
+        self._conc_initial = np.array(self._df_conc_initial).transpose() # initial concentrations for all species
+        self._conc_equilibrated = np.zeros((self.num_species, self.num_points))
+        self._eq_pos = np.clip(self._equilibria, 0, np.inf)
+        self._eq_neg = np.clip(-self._equilibria, 0, np.inf)
+        
+    # the next two functions can be rewritten without the for-loop, but I cannot think in 3D
+    def __fsolve_target_fnc(self, conc, conc0, assconst):
+        return [
+                *(np.prod( np.power(conc, self._eq_pos), axis=1) * assconst * self._scopicity - \
+                  np.prod( np.power(conc, self._eq_neg), axis=1)),
+                *(np.matmul(self._ss.boundary_matrix, conc) - conc0)
+            ]
+    
     def calc_equil_conc(self, ass_const:np.ndarray):
-        # create empty matrices to store concentrations:
-        self._Del = self._Del0
-        self._conc = self._conc_initial
-        
-		# set equilibrium constants for each equilibrium:
-        ass_const = ass_const * self._scopicity
-        
-        # set simulation variables:
-        MAX_ITER = 1e6
-        V_STABLE = 1e-8
-        V_SHRINK = 0.3
-        V_GROW = 1.1
-        
+        # ass_const is still in the form [K_a, alpha1, alpha2, ...], so transform it:
+        ass_const_copy = np.copy(ass_const) # if not copied, original array will be overwritten --> bad
+        ass_const_copy[1:] = ass_const_copy[1:]*ass_const_copy[0]
         # for each titration point, calculate concentrations:
         for p in range(self.num_points):
-            # set initial time increment:
-            #dt = np.min(self.conc0[p]) / np.max(ass_const)
-            dt = self._conc_min[p] / np.max(ass_const)
-            
-            current_iteration = 0
-            sim_has_converged = False
-            while not sim_has_converged:
-                
-                # calculate next concentration:
-                #self._Del[p,:] = 0.0
-                self._Del[:,p] = 0.0
-                for e in range(self.num_equil):
-                    k_f = 1.0e6
-                    k_b = k_f / ass_const[e]
-                    f = np.prod(( np.power(self._conc[:,p], np.abs(self._equilibria[e])) )[ self._equilibria[e] > 0 ])
-                    b = np.prod(( np.power(self._conc[:,p], np.abs(self._equilibria[e])) )[ self._equilibria[e] < 0 ])
-                    self._Del[:,p] += -self._equilibria[e] * (f*k_f - b*k_b) * dt
-                self._conc[:,p] += self._Del[:,p]
-                
-                # has concentration gone negative?
-                if np.count_nonzero( self._conc[:,p] < 0.0 ) > 0:
-                    index_of_minimum = np.argmin(self._conc[:,p])
-                    minConc2 = self._conc[:,p][index_of_minimum]
-                    self._conc[:,p] -= self._Del[:,p] # restore original concentrations
-                    minConc1 = self._conc[:,p][index_of_minimum]
-                    dt *= V_SHRINK * minConc1/(minConc1-minConc2)
-                else:
-                    dt *= V_GROW
-                
-                # has concentration converged?
-                sim_has_converged = not (np.count_nonzero( self._Del[:,p] > V_STABLE * dt ) > 0)
-                
-                # if too many iterations, take corrective action
-                if current_iteration > MAX_ITER:
-                    raise Exception('Simulation has reached maximum number of iterations.')
-                else:
-                    current_iteration += 1
-        
-        self._conc_equilibrated = self._conc
+            self._conc_equilibrated[:,p] = fsolve(self.__fsolve_target_fnc,
+                       x0=self._conc_initial[:,p],
+                       args=(self._conc0[:,p], ass_const_copy))
 
 
 
