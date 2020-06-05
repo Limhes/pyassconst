@@ -5,8 +5,9 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import numpy.ma as ma # ma = masked arrays
-#import bindfit as bf
 import bindfit as bf
+
+
 
 if __name__ == '__main__':
     
@@ -118,4 +119,3 @@ if __name__ == '__main__':
     
     # remove overlaps between title and labels:
     plt.tight_layout()
-    

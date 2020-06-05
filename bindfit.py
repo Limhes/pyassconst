@@ -4,8 +4,7 @@
 from collections import Counter
 import numpy as np
 import pandas as pd
-from scipy.optimize import least_squares
-from scipy.optimize import fsolve
+from scipy.optimize import least_squares, fsolve
 
 
 
@@ -69,11 +68,10 @@ class ConcentrationProfileSimulator:
     def __init__(self, ss:SupraSystem):
         # highest level data:
         self._ss = ss
-        self._df_conc_initial = pd.DataFrame()
-        self._conc0 = np.array([])
-        self._conc_initial = np.array([])
-        self._conc_equilibrated = np.array([])
-    
+        self._conc0 = np.array([]) # initial concentrations, only starting species
+        self._conc_initial = np.array([]) # initial concentrations, all species
+        self._conc_equilibrated = np.array([]) # concentrations at chemical equilibrium
+        
         # concentration matrices:
         self._scopicity = np.array(self._ss.equilibria['scopicity'])
         self._equilibria = np.array(self._ss.equilibria[self._ss.species_names])
@@ -100,20 +98,21 @@ class ConcentrationProfileSimulator:
         return self._conc_equilibrated[self.species_names.index(species_name), :]
     
     def initial_conc(self, species_name:str) -> np.ndarray:
-        return self._df_conc_initial[species_name].to_numpy()
+        return self._conc_initial[self.species_names.index(species_name), :]
 
     def set_initial_concentrations(self, conc_initial:pd.DataFrame):
-        self._df_conc_initial = pd.DataFrame( {key: [] for key in self._ss.species_names} )
-        self._df_conc_initial = pd.concat([self._df_conc_initial, conc_initial],
-                                      axis=0, join='outer', ignore_index=True).fillna(0.0).sort_index(axis=1)
+        # set initial concentration arrays from dataframe:
+        self._conc_initial = np.array(
+                pd.concat( [ pd.DataFrame( {key: [] for key in self._ss.species_names} ), conc_initial],
+                            axis=0, join='outer', ignore_index=True ).fillna(0.0).sort_index(axis=1)
+            ).transpose()
+        self._conc0 = np.array(conc_initial.sort_index(axis=1)).transpose()
         
-        self._conc0 = np.array(conc_initial.sort_index(axis=1)).transpose() # initial concentrations, only starting species
-        self._conc_initial = np.array(self._df_conc_initial).transpose() # initial concentrations for all species
         self._conc_equilibrated = np.zeros((self.num_species, self.num_points))
         self._eq_pos = np.clip(self._equilibria, 0, np.inf)
         self._eq_neg = np.clip(-self._equilibria, 0, np.inf)
         
-    # the next two functions can be rewritten without the for-loop, but I cannot think in 3D
+    # the next two functions can be rewritten without the for-loop, but I cannot think (yet) in 3D
     def __fsolve_target_fnc(self, conc, conc0, assconst):
         return [
                 *(np.prod( np.power(conc, self._eq_pos), axis=1) * assconst * self._scopicity - \
@@ -124,7 +123,7 @@ class ConcentrationProfileSimulator:
     def calc_equil_conc(self, ass_const:np.ndarray):
         # ass_const is still in the form [K_a, alpha1, alpha2, ...], so transform it:
         ass_const_copy = np.copy(ass_const) # if not copied, original array will be overwritten --> bad
-        ass_const_copy[1:] = ass_const_copy[1:]*ass_const_copy[0]
+        ass_const_copy[1:] = ass_const_copy[1:]*ass_const_copy[0] # change alpha_N into K_(N+1)
         # for each titration point, calculate concentrations:
         for p in range(self.num_points):
             self._conc_equilibrated[:,p] = fsolve(self.__fsolve_target_fnc,
